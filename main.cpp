@@ -68,6 +68,7 @@ class Cidade{
     std::mutex mut;
     std::condition_variable cv;
     std::atomic<int> populacao;
+    std::atomic<int> popNaoVotante;
 
 
     public:
@@ -83,29 +84,16 @@ class Cidade{
     }
     void votacao(){
         std::vector<std::thread> votPorHabitante;
-        //std::cout<<"\nvec tam"<<urnasLivres.size();
-        for (int i=0;i<populacao;i++)
+        //popNaoVotante = std::copy(populacao);
+        for (int i=0;i<URNAS_CIDADE;i++)
         {
-            votPorHabitante.push_back(std::thread([] (std::vector<Urna>& urnas, std::mutex& mut,
-            std::vector<int> urnasLivres, std::condition_variable& cv, std::atomic<int>& populacao){
-                std::unique_lock<std::mutex> ul (mut);
-                ul.unlock();
-                //std::cout<<"\nComecou a Thread: "<<std::this_thread::get_id()<<" ->Cidade.votacao()\n";
-                while(urnasLivres.empty())
-                    cv.wait(ul);
-                //std::cout<<"\nPassei do while\n";
-                //std::cout<<"\nLivres.size() = "<<urnasLivres.size();
-                //std::cout<<"\nUrnas.size() = "<<urnas.size();
-                ul.lock();
-                int ind = urnasLivres.back();
-                //std::cout<<"\nPeguei o indice "<<ind;
-                urnasLivres.pop_back();
-                urnas.at(ind).vota();
-                urnasLivres.push_back(ind);
-                ul.unlock();
-                cv.notify_one();
-                //std::cout<<"\nTerminou a Thread: "<<std::this_thread::get_id()<<" ->Cidade.votacao()\n";
-            }, std::ref(urnas), std::ref(mut), std::ref(urnasLivres), std::ref(cv), std::ref(populacao)));
+            votPorHabitante.push_back(std::thread([] (Urna& urna, std::atomic<int>& populacao){
+                while(populacao>0)
+                {
+                    populacao--;
+                    urna.vota();
+                }
+            }, std::ref(urnas.at(i)), std::ref(populacao)));
         }
         //mut.unlock();
         //cv.notify_one();
@@ -121,10 +109,8 @@ class Cidade{
             APURA.push_back(std::thread ([] (std::vector<long>& v, std::vector<Urna>& u, int n, std::mutex& mut,
             std::condition_variable& cv) {
                 std::unique_lock<std::mutex> lk (mut);
-                //std::cout<<"\nComecou a Thread: "<<std::this_thread::get_id()<<" ->cidade.apura()\n";
                 for(int i=0;i<N_CANDIDATOS;i++)
                     v[i] += u[n].apuraUrna(i);
-                //std::cout<<"\nTerminou a Thread: "<<std::this_thread::get_id()<<" ->cidade.apura()\n";
                 lk.unlock();
                 cv.notify_one();
             },std::ref(votosPorCidade), std::ref(urnas), i, std::ref(mut), std::ref(cv)));
@@ -160,6 +146,13 @@ class Reino{
     Reino(){
         cidades = std::vector<Cidade>(20);
     }
+    void mostra()
+    {
+        for(auto& cidade:cidades){
+            cidade.apura();
+            cidade.mostra();
+        }
+    }
     void votacao(){
         std::vector<std::thread> votPorReino;
         for(int i=0;i<CIDADE_REINO;i++)
@@ -190,7 +183,7 @@ class Eleicao{
     Eleicao(){
         votosGeral = std::vector<long> (7);
         votosPorReino = std::vector<std::vector<long>>  (7);
-        votosPorCidade=std::vector<std::vector<long>>  (140);
+        votosPorCidade= std::vector<std::vector<long>>  (140);
         reinos = std::vector<Reino>  (7);
     }
 
@@ -199,11 +192,7 @@ class Eleicao{
         for(int i=0;i<N_REINOS;i++)
         {
             votPorReino.push_back(std::thread([] (Reino& reino){
-                //politica de acesso
-                //std::cout<<"\nComecou a Thread: "<<std::this_thread::get_id()<<" ->Eleicao.votacao()\n";
                 reino.votacao();
-                //std::cout<<"\nTerminou a Thread: "<<std::this_thread::get_id()<<" ->Eleicao.votacao()\n";
-                //politica de acesso
             }, std::ref(reinos[i])));
         }
         for(auto& threadLancada:votPorReino)
@@ -212,8 +201,28 @@ class Eleicao{
         }
     }
 
-    void apuraGeral(){}
+    void mostraGeral(){
+        for(auto& reino: reinos)
+            reino.mostra();
+    }
 
+    void apura(){
+        /*td::vector<std::thread> votPorReino;
+        for(Reino& reino:reinos)
+        {
+            votPorReino.push_back(std::thread([] (Reino& reino){
+                reino.apura();
+            }, std::ref(reino)));
+        }
+        for(auto& threadLancada:votPorReino)
+        {
+            threadLancada.join();
+        }*/
+    }
+    auto getReinos()
+    {
+        return &reinos;
+    }
     void mostraParcial(int NUM_THREADS)
     {
 
@@ -223,40 +232,12 @@ class Eleicao{
 
 };
 int main(){
-    std::vector<std::thread> vec;
-    std::vector<Cidade> v(5);
-    srand(time(NULL));/*
-    for(int cidade =0;cidade<5;cidade++)
-    {
-        for(int urna =0;urna<URNAS_CIDADE;urna++)
-        {
-            for(int pessoa=0;pessoa<5;pessoa++)
-            {
-                vec.push_back(std::thread([] (std::vector<Cidade>& v, int cidade, int urna) {
-                    v[cidade].getUrna(urna)->vota(rand()%7);
-                },std::ref(v), cidade, urna ));
-            }
-        }
-    }
-    for(auto& x:vec)
-    {
-        x.join();
-    }*/
+    srand(time(NULL));
     Eleicao a;
     a.votacao();
     std::cout<<"VOTACAO ENCERRADA";
-    vec.clear();
-    for(int i=0;i<5;i++)
-    {
-        vec.push_back(std::thread([] (std::vector<Cidade>& v, int i) {
-            v[i].apura();
-            v[i].mostra();
-        }, std::ref(v), i));
-    }
-    for(auto& x:vec)
-    {
-        x.join();
-    }
+    a.mostraGeral();
+
     return 0;
 }
 
