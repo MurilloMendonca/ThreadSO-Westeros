@@ -64,11 +64,9 @@ class Cidade{
     private:
     std::vector<long> votosPorCidade;
     std::vector<Urna> urnas;
-    std::vector<int> urnasLivres;
     std::mutex mut;
     std::condition_variable cv;
     std::atomic<int> populacao;
-    std::atomic<int> popNaoVotante;
 
 
     public:
@@ -77,43 +75,39 @@ class Cidade{
         urnas = std::vector<Urna> (URNAS_CIDADE);
         votosPorCidade = std::vector<long>(N_CANDIDATOS);
         populacao = (rand()%29001) + 1000;
-        for(int i=0;i<URNAS_CIDADE;i++)
-        {
-            urnasLivres.push_back(i);
-        }
     }
     void votacao(){
-        std::vector<std::thread> votPorHabitante;
-        //popNaoVotante = std::copy(populacao);
-        for (int i=0;i<URNAS_CIDADE;i++)
+        std::vector<std::thread> threadPorUrna;
+        std::atomic<int> votos;
+        for (Urna& urna:urnas)
         {
-            votPorHabitante.push_back(std::thread([] (Urna& urna, std::atomic<int>& populacao){
-                while(populacao>0)
+            threadPorUrna.push_back(std::thread([] (Urna& urna, std::atomic<int>& populacao, std::atomic<int>& votos){
+                while(votos<populacao)
                 {
-                    populacao--;
+                    votos++;
                     urna.vota();
                 }
-            }, std::ref(urnas.at(i)), std::ref(populacao)));
+            }, std::ref(urna), std::ref(populacao), std::ref(votos)));
         }
         //mut.unlock();
         //cv.notify_one();
-        for(auto& threadLancada:votPorHabitante)
+        for(auto& threadLancada:threadPorUrna)
         {
             threadLancada.join();
         }
     }
     void apura(){
         std::vector<std::thread> APURA;
-        for(int i =0;i<URNAS_CIDADE;i++)
+        for(Urna& urna:urnas)
         {
-            APURA.push_back(std::thread ([] (std::vector<long>& v, std::vector<Urna>& u, int n, std::mutex& mut,
+            APURA.push_back(std::thread ([] (std::vector<long>& v, Urna& u, std::mutex& mut,
             std::condition_variable& cv) {
                 std::unique_lock<std::mutex> lk (mut);
                 for(int i=0;i<N_CANDIDATOS;i++)
-                    v[i] += u[n].apuraUrna(i);
+                    v[i] += u.apuraUrna(i);
                 lk.unlock();
                 cv.notify_one();
-            },std::ref(votosPorCidade), std::ref(urnas), i, std::ref(mut), std::ref(cv)));
+            },std::ref(votosPorCidade), std::ref(urna), std::ref(mut), std::ref(cv)));
         }
         for(auto& x:APURA)
         {
