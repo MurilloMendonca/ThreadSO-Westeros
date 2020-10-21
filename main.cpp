@@ -18,32 +18,22 @@
 std::atomic<long> TOTAL;
 std::atomic<long> URNAS;
 std::atomic<long> VOTOS;
-/*
-std::random_device rd;
-std::mt19937 gen;
-std::uniform_int_distribution<int> dis;
-std::discrete_distribution<int> prob;*/
 
 class Urna
 {
 private:
-    std::mutex mut;
-    /*
-    std::random_device rd;
-    std::mt19937 gen;
-    std::uniform_int_distribution<int> dis;
-    std::discrete_distribution<int> prob;*/
+    std::mutex protegeUrna;  //Semaforo para proteger escritas e leituras no vector votos
+    std::vector<long> votos; //Vector que guarda os votos registrados nesta urna
 
 public:
-    std::vector<long> votos;
     Urna()
     {
-        votos = std::vector<long>(N_CANDIDATOS);
+        votos = std::vector<long>(N_CANDIDATOS); //Inicializa vector de votos
     }
 
     void vota(int candidato)
     {
-        std::unique_lock<std::mutex> ul(mut); //Trava operacoes nesta urna
+        std::unique_lock<std::mutex> ul(protegeUrna); //Trava operacoes nesta urna
 
         votos.at(candidato)++; //Registra voto para um candidato nesta urna
         TOTAL++;               //Atualiza a quantidade de votos geral
@@ -53,20 +43,20 @@ public:
 
     long apuraUrna(int candidato)
     {
-        std::unique_lock<std::mutex> ul(mut); //Trava operacoes nesta urna
-        return votos[candidato];              //Retorna quantos votos o candidato tem registrados nesta urna
+        std::unique_lock<std::mutex> ul(protegeUrna); //Trava operacoes nesta urna
+        return votos[candidato];                      //Retorna quantos votos o candidato tem registrados nesta urna
     }
 };
 
 class Cidade
 {
 private:
-    std::vector<Urna> urnas;
-    std::atomic<int> populacao;
-    std::random_device rd;
-    std::mt19937 gen;
-    std::uniform_int_distribution<int> pesos;
-    std::discrete_distribution<int> tendencias;
+    std::vector<Urna> urnas;    //Vector que guarda cada urna desta cidade
+    std::atomic<int> populacao; //Quantidade de habitantes desta cidade
+    std::mutex mut;
+    std::random_device rd;                      //Dispositivo gerador aleatorio
+    std::mt19937 gen;                           //Gerador aleatorio
+    std::discrete_distribution<int> tendencias; //Distribuicao discreta que gera votos aleatorios com base nas tendencias desta cidade
 
 public:
     Cidade()
@@ -77,9 +67,8 @@ public:
         std::uniform_int_distribution<int> popProb(1000, 30000);
         populacao = popProb(gen); //Define o tamanho da populacao desta cidade
 
-                                                       
-        std::uniform_int_distribution<int> dis(1, 9); 
-        tendencias = std::discrete_distribution<int>{(double)dis(gen),
+        std::uniform_int_distribution<int> dis(1, 9);
+        tendencias = std::discrete_distribution<int>{(double)dis(gen), //Gera as tendencias para esta cidade
                                                      (double)dis(gen),
                                                      (double)dis(gen),
                                                      (double)dis(gen),
@@ -87,7 +76,7 @@ public:
                                                      (double)dis(gen),
                                                      (double)dis(gen)};
     }
-    void votacao()
+    void votacao(std::mutex &protegeEscrita)
     {
         std::vector<std::thread> threadPorUrna;
         std::atomic<int> votos; //Contador de votos realizados
@@ -95,15 +84,22 @@ public:
         for (Urna &urna : urnas) //Itera para cada urna da cidade
         {
             threadPorUrna.push_back(std::thread([](Urna &urna, std::atomic<int> &populacao, std::atomic<int> &votos,
-            std::mt19937& gen, std::discrete_distribution<int>& prob) {
+                                                   std::mt19937 &gen, std::discrete_distribution<int> &prob, std::mutex &mut) {
+                
                 while (votos < populacao) //Enquanto toda a populacao ainda nao votou
                 {
-                    votos++;     //Registra um novo voto
+                    std::unique_lock<std::mutex> ul (mut);
                     urna.vota(prob(gen)); //Vota
+                    votos++;              //Registra um novo voto
+                    ul.unlock();
                 }
             },
-                                                std::ref(urna), std::ref(populacao), std::ref(votos),
-                                                std::ref(gen), std::ref(tendencias)));
+                                                std::ref(urna),
+                                                std::ref(populacao),
+                                                std::ref(votos),
+                                                std::ref(gen),
+                                                std::ref(tendencias),
+                                                std::ref(protegeEscrita)));
         }
 
         for (auto &threadLancada : threadPorUrna) //Para cada thread lançada e armazenada em threadPoUrna
@@ -143,7 +139,10 @@ public:
             }
             URNAS++; //Contabiliza a quantidade total de urnas apurados
 
-            urnaApurada.notify_one(); //Notifica que uma urna foi apurada
+            urnaApurada.notify_all(); //Notifica que uma urna foi apurada
+                                        //Para escritas mais legiveis na tela pode-se usar .notify_one()
+                                        //Nao foi usado neste caso pois apos apurar cada urna deve-se avisar todas as
+                                        //telas leitoras
         };
 
         for (Urna &urna : urnas) //Para cada urna
@@ -163,12 +162,16 @@ public:
             threadLancada.join(); //Aguarda a thread finalizar para proseguir
         }
     }
+    long getPopulacao()
+    {
+        return populacao;
+    }
 };
 
 class Reino
 {
 private:
-    std::vector<Cidade> cidades;
+    std::vector<Cidade> cidades; //Vector que guarda cada cidade deste reino
 
 public:
     Reino()
@@ -198,46 +201,53 @@ public:
         }
     }
 
-    void votacao()
+    void votacao(std::mutex &protegeEscrita)
     {
         std::vector<std::thread> votPorReino;
         for (int i = 0; i < CIDADE_REINO; i++) //Para cada cidade em um reino
         {
-            votPorReino.push_back(std::thread([](Cidade &cidade) {
-                cidade.votacao(); //realiza votacao na cidade
+            votPorReino.push_back(std::thread([](Cidade &cidade, std::mutex &protegeEscrita) {
+                cidade.votacao(std::ref(protegeEscrita)); //realiza votacao na cidade
             },
-                                              std::ref(cidades[i])));
+                                              std::ref(cidades.at(i)), std::ref(protegeEscrita)));
         }
         for (auto &threadLancada : votPorReino) //Para cada thread lançada e armazenada em apuraPoUrna
         {
             threadLancada.join(); //Aguarda a thread finalizar para proseguir
         }
     }
+    long getPopulacao()
+    {
+        long pop = 0;
+        for (Cidade &cid : cidades)
+            pop += cid.getPopulacao();
+        return pop;
+    }
 };
 
 class Eleicao
 {
-    std::vector<std::vector<std::vector<long>>> votosPorCidade;
-    std::vector<std::vector<long>> votosPorReino;
-    std::vector<long> votosGeral;
-    std::vector<std::vector<int>> maisVotadoPorCidade;
-    std::vector<int> maisVotadoPorReino;
-    std::vector<Reino> reinos;
-    std::mutex impressaoMut;
-    std::mutex mut;
-    std::mutex protegeEscrita;
-    std::condition_variable urnaApurada;
-    std::condition_variable valoresAtualizados;
-    std::atomic<long> apuradas;
+private:
+    std::vector<std::vector<std::vector<long>>> votosPorCidade; //Vector que guarda os votos de cada candidato por cidade [reino] [cidade] [candidato]
+    std::vector<std::vector<long>> votosPorReino;               //Vector que guarda os votos de cada candidato por reino [reino] [candidato]
+    std::vector<long> votosGeral;                               //Vector que guarda a quantidade de votos de cada candidato [considato]
+    std::vector<std::vector<char>> maisVotadoPorCidade;         //Vector que guarda os condidatos mais votados por cidade [reino] [cidade]
+    std::vector<char> maisVotadoPorReino;                       //Vector que guarda os condidatos mais votados por reino [reino]
+    std::vector<Reino> reinos;                                  //Vector de reinos
+    std::mutex impressaoMut;                                    //Semaforo para escritas na tela
+    std::mutex protegeEscrita;                                  //Semaforo para escritas nos vectors
+    std::condition_variable urnaApurada;                        //avisa que uma urna foi apurada
+    std::atomic<long> apuradas;                                 //Contador de urnas apuradas
+    long populacaoTotal;
 
 public:
     Eleicao()
     {
-        votosGeral = std::vector<long>(7);
-        votosPorReino = std::vector<std::vector<long>>(7);
+        votosGeral = std::vector<long>(N_CANDIDATOS); //Inicializa os vectors
+        votosPorReino = std::vector<std::vector<long>>(N_REINOS);
         for (int i = 0; i < N_REINOS; i++)
         {
-            votosPorReino[i] = std::vector<long>(7);
+            votosPorReino[i] = std::vector<long>(N_CANDIDATOS);
             votosPorCidade.emplace_back();
             maisVotadoPorReino.push_back(-1);
             maisVotadoPorCidade.emplace_back();
@@ -249,43 +259,53 @@ public:
                     votosPorCidade[i][j].push_back(0);
             }
         }
-        reinos = std::vector<Reino>(7);
+        reinos = std::vector<Reino>(N_REINOS);
     }
 
     void votacao()
     {
-        std::vector<std::thread> votPorReino;
-        for (int i = 0; i < N_REINOS; i++)
+        std::vector<std::thread> votPorReino; //Vector de threads
+        for (int i = 0; i < N_REINOS; i++)    //Para cada reino
         {
-            votPorReino.push_back(std::thread([](Reino &reino) {
-                reino.votacao();
+            votPorReino.push_back(std::thread([](Reino &reino, std::mutex &protegeEscrita) {
+                reino.votacao(std::ref(protegeEscrita)); //realiza votacao em um reino
             },
-                                              std::ref(reinos[i])));
+                                              std::ref(reinos.at(i)), std::ref(protegeEscrita)));
         }
-        for (auto &threadLancada : votPorReino)
+        for (auto &threadLancada : votPorReino) //Para cada thread lançada e armazenada em apuraPoUrna
         {
-            threadLancada.join();
+            threadLancada.join(); //Aguarda a thread finalizar para proseguir
         }
     }
 
     void atualizaMaisVotados()
     {
-        std::unique_lock<std::mutex> ul(protegeEscrita);
-        urnaApurada.wait(ul);
-        for (int reino = 0; reino < N_REINOS; reino++)
-        {
-            maisVotadoPorReino[reino] = std::find(votosPorReino[reino].begin(),
-                                                  votosPorReino[reino].end(),
-                                                  *std::max_element(votosPorReino[reino].begin(),
-                                                                    votosPorReino[reino].end())) -
-                                        votosPorReino[reino].begin();
+        std::unique_lock<std::mutex> ul(protegeEscrita); //Trava o semaforo para ler os vetores
+        urnaApurada.wait(ul);                            //Espera notificacao de urna apurada
 
-            for (int cidade = 0; cidade < CIDADE_REINO; cidade++)
+        for (int reino = 0; reino < N_REINOS; reino++) //Para cada reino
+        {
+            bool zeros = std::all_of(votosPorReino[reino].begin(),
+                                     votosPorReino[reino].end(),
+                                     [](long i) { return i == 0; });
+            if (zeros)
+                maisVotadoPorReino[reino] = '*';
+            else
+                maisVotadoPorReino[reino] =48 + std::max_element(votosPorReino[reino].begin(), //Pega o maior elemento deste vector
+                                                             votosPorReino[reino].end()) -
+                                            votosPorReino[reino].begin();
+
+            for (int cidade = 0; cidade < CIDADE_REINO; cidade++) //Para cada cidade
             {
-                maisVotadoPorCidade[reino][cidade] = std::find(votosPorCidade[reino][cidade].begin(),
-                                                               votosPorCidade[reino][cidade].end(),
-                                                               *std::max_element(votosPorCidade[reino][cidade].begin(), votosPorCidade[reino][cidade].end())) -
-                                                     votosPorCidade[reino][cidade].begin();
+                bool zeros = std::all_of(votosPorCidade[reino][cidade].begin(),
+                                         votosPorCidade[reino][cidade].end(),
+                                         [](long i) { return i == 0; });
+                if (zeros)
+                    maisVotadoPorCidade[reino][cidade] ='*';
+                else
+                    maisVotadoPorCidade[reino][cidade] = 48 + std::max_element(votosPorCidade[reino][cidade].begin(),
+                                                                          votosPorCidade[reino][cidade].end()) -
+                                                         votosPorCidade[reino][cidade].begin();
             }
         }
     }
@@ -299,79 +319,86 @@ public:
                                                  std::vector<std::vector<long>> &votosPorCidade,
                                                  std::condition_variable &urnaApurada,
                                                  std::mutex &protegeEscrita) {
+                //Chama a apuracao de cada reino
                 reino.apura(std::ref(votosGeral), std::ref(votosPorReino), std::ref(votosPorCidade), std::ref(urnaApurada), std::ref(protegeEscrita));
             },
                                               std::ref(reinos.at(reino)), std::ref(votosGeral), std::ref(votosPorReino[reino]), std::ref(votosPorCidade.at(reino)), std::ref(urnaApurada), std::ref(protegeEscrita)));
         }
-        for (auto &threadLancada : votPorReino)
+        for (auto &threadLancada : votPorReino) //Para cada thread lançada e armazenada em apuraPoUrna
         {
-            threadLancada.join();
+            threadLancada.join(); //Aguarda a thread finalizar para proseguir
         }
+        urnaApurada.notify_all(); //Notifica para avisar todas as outras threads de que a apuracao foi finalizada
     }
-
     void mostraParcial()
     {
-        while (URNAS < URNAS_CIDADE * CIDADE_REINO * N_REINOS)
+        while (URNAS < URNAS_CIDADE * CIDADE_REINO * N_REINOS) //Enquanto faltam urnas para apurar
         {
-            
-            atualizaMaisVotados();
-            //impressaoMut.lock();
-            std::unique_lock<std::mutex> ul (impressaoMut);
-            
-            system("clear");
-            std::cout<<"Imprimindo da thread: "<<std::this_thread::get_id();
-            //BARRA DE CARREGAMENTO
-            float urnaPercent = 100*URNAS/(URNAS_CIDADE * CIDADE_REINO * N_REINOS);
-            std::cout<<"\n[";
-            for(int i=0;i<100;i++)
-            {
-                if(urnaPercent>i) std::cout<<"#";
-                else std::cout<<".";
-            }
-            std::cout<<"]";
-            std::cout << "\tVotos apurados: "<<100*VOTOS/TOTAL<<"%"
-                      << "\tUrnas apuradas: "<<urnaPercent<<"%";
 
+            atualizaMaisVotados();                         //Atualiza os candidatos mais votados
+            std::unique_lock<std::mutex> ul(impressaoMut); //Bloqueia outras threads de impressao
+
+            system("clear");                                                     //Limpa tela
+            std::cout << "Imprimindo da thread: " << std::this_thread::get_id(); //Mostra qual thread esta imprimindo
+
+            float urnaPercent = 100 * URNAS / (URNAS_CIDADE * CIDADE_REINO * N_REINOS); //Calcula a porcentagem de urnas já apuradas
+            //BARRA DE CARREGAMENTO
+            std::cout << "\n[";
+            for (int i = 0; i < 100; i++)
+            {
+                if (urnaPercent > i)
+                    std::cout << "#";
+                else
+                    std::cout << ".";
+            }
+            std::cout << "]";
+            std::cout << "\tVotos apurados: " << 100 * VOTOS / TOTAL << "%"
+                      << "\tUrnas apuradas: " << urnaPercent << "%";
+
+            //MOSTRA CLASSIFICACAO GERAL
             std::cout << std::endl
                       << std::setw(75) << "Classificacao Geral" << std::endl;
-            for (int i = 0; i < N_CANDIDATOS; i++)
+            for (int i = 0; i < N_CANDIDATOS; i++) //Para cada candidato
             {
                 std::cout << std::setw(60) << "Candidato: " << i << std::setw(20) << votosGeral.at(i) << " -> " << 100.0 * votosGeral.at(i) / VOTOS << "%" << std::endl;
             }
-            
-            std::cout << std::endl;
-            for(int i =0;i<N_REINOS;i++)
-            {
-                std::cout <<"Reino "<<i<<": " << maisVotadoPorReino[i] << std::setw(19);
-            }
-            std::cout <<std::endl<<std::setw(0);
 
-            for (int i = 0; i < CIDADE_REINO; i++)
+            //MOSTRA MAIS VOTADO EM CADA REINO
+            std::cout << std::endl;
+            for (int i = 0; i < N_REINOS; i++)
             {
-                
-                for(int j=0;j<N_REINOS;j++)
-                {
-                    std::cout<<"Cidade " << std::setw(2) << i << ": " << std::setw(5) << maisVotadoPorCidade[j].at(i) << std::setw(14);
-                }
-                std::cout<<std::endl<<std::setw(0);
+                std::cout << "Reino " << i << ": " << maisVotadoPorReino[i] << std::setw(19);
             }
-            ul.unlock();
+            std::cout << std::endl
+                      << std::setw(0);
+
+            //MOSTRA MAIS VOTADO EM CADA CIDADE
+            for (int i = 0; i < CIDADE_REINO; i++) //Para cada cidade
+            {
+                for (int j = 0; j < N_REINOS; j++) //Para cada reino
+                {
+                    std::cout << "Cidade " << std::setw(2) << i << ": " << std::setw(5) << maisVotadoPorCidade[j].at(i) << std::setw(14);
+                }
+                std::cout << std::endl
+                          << std::setw(0);
+            }
+
+            ul.unlock(); //Desbloqueia o semaforo
         }
     }
 };
 int main()
 {
-    std::cout << "VOTACAO INICIADA... aguarde";
-    Eleicao westeros;
-    std::thread vota([](Eleicao &a) {
+    Eleicao westeros;                               //Cria eleicao
+    std::thread vota([](Eleicao &a) {               //Lanca a thread de votacao
         a.votacao();
     },
                      std::ref(westeros));
-
-    vota.join();
+    vota.join();                                    //Espera a votacao terminar
 
     std::cout << "\nVOTACAO ENCERRADA\n A APURACAO SE INICIARA EM BREVE";
-    std::thread apura([](Eleicao &a) {
+
+    std::thread apura([](Eleicao &a) {              //Lanca a thread de apuracao da eleicao
         a.apura();
     },
                       std::ref(westeros));
@@ -380,20 +407,21 @@ int main()
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<int> dis(100, 500);
-    int numMonitores = dis(gen);
-    std::vector<std::thread> monitores;
 
-    for(int monitor=0;monitor<numMonitores;monitor++)
+    int numMonitores = dis(gen);                        //Sorteia o numeros de threads de leitura             
+
+    std::vector<std::thread> monitores;                 //Cria vector de threads leitoras
+
+    for (int monitor = 0; monitor < numMonitores; monitor++)    //Para cada monitor
     {
-        monitores.push_back(std::thread ( [] (Eleicao &a) {
+        monitores.push_back(std::thread([](Eleicao &a) {
             a.mostraParcial();
         },
-                       std::ref(westeros)));
+                                        std::ref(westeros)));
     }
-
-    apura.join();
-    for(auto& monitor:monitores)
-        monitor.join();
+    apura.join();                                       //Aguarda a apuracao terminar
+    for (auto &monitor : monitores)                     //Para cada monitor
+        monitor.join();                                 //Aguarda o monitor terminar
 
     return 0;
 }
