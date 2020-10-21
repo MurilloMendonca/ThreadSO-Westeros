@@ -19,6 +19,8 @@
 #define CIDADE_REINO 20
 #define N_REINOS 7
 
+using namespace std::chrono_literals;
+
 std::atomic<long> TOTAL;
 std::atomic<long> URNAS;
 std::atomic<long> VOTOS;
@@ -103,34 +105,52 @@ public:
     }
     void apura(std::vector<long> &votosGeral, std::vector<long> &votosPorReino, std::vector<long> &votosPorCidade, std::condition_variable &urnaApurada, std::mutex& protegeEscrita)
     {
+
+
         std::vector<std::thread> APURA;
+        auto f = [](
+                    std::vector<long> &votosGeral,
+                    std::vector<long> &votosPorCidade,
+                    std::vector<long> &votosPorReino,
+                    Urna &urna,
+                    std::condition_variable &urnaApurada,
+                    std::mutex &protegeEscrita
+                    )
+                    {
+                        std::unique_lock<std::mutex> lk(protegeEscrita);
+
+
+
+                        for (int i = 0; i < N_CANDIDATOS; i++)
+                        {
+                            int temp = urna.apuraUrna(i);
+                            votosGeral.at(i) +=temp;
+                            votosPorCidade.at(i) += temp;
+                            votosPorReino.at(i) += temp;
+                            VOTOS += temp;
+                        }
+                        URNAS++;
+
+
+                        lk.unlock();
+                        urnaApurada.notify_one();
+
+                    };
         for (Urna &urna : urnas)
         {
-            APURA.push_back(std::thread([](std::vector<long> &votosGeral,
-                                        std::vector<long> &votosPorCidade, std::vector<long> &votosPorReino, Urna &urna,
-                                           std::condition_variable &urnaApurada, std::mutex &protegeEscrita) {
-                std::unique_lock<std::mutex> lk(protegeEscrita);
-                //sleep(2);
-                for (int i = 0; i < N_CANDIDATOS; i++)
-                {
-                    int temp = urna.apuraUrna(i);
-                    votosGeral.at(i) +=temp;
-                    votosPorCidade.at(i) += temp;
-                    votosPorReino.at(i) += temp;
-                    VOTOS += temp;
-                }
-                URNAS++;
-                lk.unlock();
-                sleep(2);
-                urnaApurada.notify_one();
-                
-            },
+            APURA.push_back(std::thread(f,
                                         std::ref(votosGeral),
-                                        std::ref(votosPorCidade), 
-                                        std::ref(votosPorReino), 
-                                        std::ref(urna), 
+                                        std::ref(votosPorCidade),
+                                        std::ref(votosPorReino),
+                                        std::ref(urna),
                                         std::ref(urnaApurada),
-                                        std::ref(protegeEscrita)));
+                                        std::ref(protegeEscrita)
+                                        )
+                                    );
+                        int tempo = rand() % 119 + 2;
+                        auto start = std::chrono::high_resolution_clock::now();
+                        std::this_thread::sleep_for(std::chrono::seconds(tempo));
+                        auto end = std::chrono::high_resolution_clock::now();
         }
         for (auto &x : APURA)
         {
@@ -175,9 +195,9 @@ public:
                 cidade.apura(std::ref(votosGeral), std::ref(votosPorReino), std::ref(votosPorCidade), std::ref(urnaApurada), std::ref(protegeEscrita));
             },
                                                 std::ref(cidades.at(cidade)),
-                                                std::ref(votosGeral), 
-                                                std::ref(votosPorReino), 
-                                                std::ref(votosPorCidade.at(cidade)), 
+                                                std::ref(votosGeral),
+                                                std::ref(votosPorReino),
+                                                std::ref(votosPorCidade.at(cidade)),
                                                 std::ref(urnaApurada),
                                                 std::ref(protegeEscrita)));
         }
@@ -257,14 +277,14 @@ public:
     }
 
     void atualizaMaisVotados()
-    {     
+    {
         std::unique_lock<std::mutex> ul (protegeEscrita);
         urnaApurada.wait(ul);
             for (int reino = 0; reino < N_REINOS; reino++)
             {
                 maisVotadoPorReino[reino] = std::find(votosPorReino[reino].begin(),
                                                        votosPorReino[reino].end(),
-                                                       *std::max_element(votosPorReino[reino].begin(), 
+                                                       *std::max_element(votosPorReino[reino].begin(),
                                                        votosPorReino[reino].end()))
                                                        - votosPorReino[reino].begin();
 
@@ -277,7 +297,7 @@ public:
                 }
             }
             //valoresAtualizados.notify_one();
-        
+
     }
     void apura()
     {
@@ -292,9 +312,9 @@ public:
                 reino.apura(std::ref(votosGeral), std::ref(votosPorReino), std::ref(votosPorCidade), std::ref(urnaApurada), std::ref(protegeEscrita));
             },
                                               std::ref(reinos.at(reino)),
-                                              std::ref(votosGeral), 
-                                              std::ref(votosPorReino[reino]), 
-                                              std::ref(votosPorCidade.at(reino)), 
+                                              std::ref(votosGeral),
+                                              std::ref(votosPorReino[reino]),
+                                              std::ref(votosPorCidade.at(reino)),
                                               std::ref(urnaApurada),
                                               std::ref(protegeEscrita)));
         }
@@ -309,7 +329,7 @@ public:
         while (URNAS < URNAS_CIDADE * CIDADE_REINO * N_REINOS)
         {
             atualizaMaisVotados();
-            //system("clear");
+            system("clear");
             std::cout << "\nTOTAL de votos: " << TOTAL<<"\tUrnas apuradas: " << URNAS<<"\tVotos apurados: "<<VOTOS;
             std::cout <<std::endl<< std::setw(75) << "Classificacao Geral" << std::endl;
             for (int i = 0; i < 7; i++)
