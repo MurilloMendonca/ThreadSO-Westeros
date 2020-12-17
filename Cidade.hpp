@@ -58,11 +58,8 @@ public:
         }
     }
 
-    void apura(std::vector<long> &votosGeral, std::vector<long> &votosPorReino, std::vector<long> &votosPorCidade, std::condition_variable &cond_escr,
-                                                 std::condition_variable &cond_leit,
-                                                 int &leitores,
-                                                 int &escritores,
-                                                 std::mutex &lock_cont)
+    void apura(std::vector<long> &votosGeral, std::vector<long> &votosPorReino, std::vector<long> &votosPorCidade,
+                                                 std::mutex &protegeEscrita)
     {
 
         std::vector<std::thread> apuraPorUrna;
@@ -71,42 +68,34 @@ public:
                             std::vector<long> &votosPorCidade,
                             std::vector<long> &votosPorReino,
                             Urna &urna,
-                            std::condition_variable &cond_escr,
-                            std::condition_variable &cond_leit,
-                            int &leitores,
-                            int &escritores,
-                            std::mutex &lock_cont) {
-            std::unique_lock<std::mutex> un(lock_cont);
-            while (escritores>0 || leitores>0)
-                cond_escr.wait(un);
-            escritores++;
-            un.unlock();
+                            std::mutex &protegeEscrita) {
             
             std::random_device rd;
             std::mt19937 gen(rd());
             std::uniform_int_distribution<int> dis(2, 120);
-
+            
             int tempo = dis(gen);                                     //define o tempo aleatorio de apuracao
             std::this_thread::sleep_for(std::chrono::seconds(tempo)); //espera o tempo de apuracao
-
+            
+            protegeEscrita.lock();                      //Trava mutex de escrita
+            //ESCREVE
+            {
             for (int candidato = 0; candidato < N_CANDIDATOS; candidato++) //para cada candidato
             {
+                
                 int temp = urna.apuraUrna(candidato);            //votos para o candidato nesta urna
                 votosGeral.at(candidato) += temp;                //Contabiliza a nivel geral para o candidato
                 votosPorCidade.at(candidato) += temp;            //Contabiliza a nivel de cidade para o candidato
                 votosPorReino.at(candidato) += temp;             //Contabiliza a nivel de reino para o candidato
-                VOTOS += temp;                                   //Contabiliza a quantidade total de votos apurados                                  //Destrava o acesso
+                VOTOS += temp;                                 //Contabiliza a quantidade total de votos apurados       
+                                          //Destrava o acesso
             }
             URNAS++; //Contabiliza a quantidade total de urnas apurados
-
-            un.lock();
-            escritores--;
-            cond_escr.notify_one();
-            cond_leit.notify_all(); //Notifica que uma urna foi apurada
-                                        //Para escritas mais legiveis na tela pode-se usar .notify_one()
-                                        //Nao foi usado neste caso pois apos apurar cada urna deve-se avisar todas as
-                                        //telas leitoras
-            un.unlock();
+            }
+            protegeEscrita.unlock();                    //Libera mutex de escrita
+            
+            
+            
         };
 
         for (Urna &urna : urnas) //Para cada urna
@@ -117,11 +106,7 @@ public:
                                                std::ref(votosPorCidade),
                                                std::ref(votosPorReino),
                                                std::ref(urna),
-                                               std::ref(cond_escr),
-                                              std::ref(cond_leit),
-                                              std::ref(leitores),
-                                              std::ref(escritores),
-                                              std::ref(lock_cont)));
+                                              std::ref(protegeEscrita)));
         }
 
         for (auto &threadLancada : apuraPorUrna) //Para cada thread lançada e armazenada em apuraPoUrna

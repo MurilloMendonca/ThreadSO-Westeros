@@ -41,6 +41,7 @@ int main()
     vota.join();                                    //Espera a votacao terminar
 
     std::cout << "\nVOTACAO ENCERRADA\n A APURACAO SE INICIARA EM BREVE";
+    std::cout.flush();
 
     std::thread apura([](Eleicao &a) {              //Lanca a thread de apuracao da eleicao
         a.apura();
@@ -48,9 +49,10 @@ int main()
                       std::ref(westeros));
 
           
-
-    std::vector<std::thread> monitores;                 //Cria vector de threads leitoras
-
+    std::vector<std::thread> monitores;  
+    while(!westeros.finalizada){
+         monitores.clear();          //Cria vector de threads leitoras
+    
     for (int monitor = 0; monitor < numMonitores; monitor++)    //Para cada monitor
     {
         monitores.push_back(std::thread([](Eleicao &a) {
@@ -58,9 +60,10 @@ int main()
         },
                                         std::ref(westeros)));
     }
-    apura.join();                                       //Aguarda a apuracao terminar
+                                     //Aguarda a apuracao terminar
     for (auto &monitor : monitores)                     //Para cada monitor
         monitor.join();                                 //Aguarda o monitor terminar
-
+    }
+    apura.join();
     return 0;
 }

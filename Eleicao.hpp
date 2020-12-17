@@ -10,16 +10,15 @@ private:
     std::mutex printMut;                                    //Leitores
     std::mutex protegeEscrita;                                  //Semaforo para escritas nos vectors
     std::mutex lock_cont; 
-    std::condition_variable cond_escr;                        //avisa que uma urna foi apurada
-    std::condition_variable cond_leit;                      //avisa que os leitores podem ser ativados
     std::atomic<long> apuradas;                                 //Contador de urnas apuradas
     int leitores;
-    int escritores;
     int leitoresMax;
 
 public:
+    bool finalizada;
     Eleicao(int Nleitores)
     {
+        finalizada=false;
         leitoresMax=Nleitores;
         leitores =0;
         votosGeral = std::vector<long>(N_CANDIDATOS); //Inicializa os vectors
@@ -59,13 +58,13 @@ public:
 
     void mostraParcial()
     {
-        while(true){
-        std::unique_lock<std::mutex> ul(lock_cont);    //Trava o semaforo para ler os vetores
-        while(escritores>0)
-            cond_leit.wait(ul);
-        leitores++;
-        ul.unlock();
-
+       lock_cont.lock();                        //Trava mutex para proteger o contador
+       leitores++;                              //Contabiliza quantidade de leitores
+       if(leitores==1) protegeEscrita.lock();   //Se eh o primeiro, trava o mutex de escrita
+       lock_cont.unlock();                      //Libera mutex do contador
+    
+        //LER
+        {
         for (int reino = 0; reino < N_REINOS; reino++) //Para cada reino
         {
             bool zeros = std::all_of(votosPorReino[reino].begin(),
@@ -95,7 +94,7 @@ public:
         system("clear");                                                     //Limpa tela
             std::cout << "Imprimindo da thread: " << std::this_thread::get_id(); //Mostra qual thread esta imprimindo
             std::cout << "\tNumero de leitores ativos: " << leitores;
-            std::cout << "\tNumero de escritores ativos: " << escritores;
+            std::cout << "\tNumero maximo de leitores: " << leitoresMax;
             float urnaPercent = 100 * URNAS / (URNAS_CIDADE * CIDADE_REINO * N_REINOS); //Calcula a porcentagem de urnas já apuradas
             //BARRA DE CARREGAMENTO
             std::cout << "\n[";
@@ -138,47 +137,40 @@ public:
                           << std::setw(0);
             }
         printMut.unlock();
-
-        ul.lock();
-        leitores--;
-        if(leitores==0) cond_escr.notify_all();
-        ul.unlock();
         }
-    }
+        
+        lock_cont.lock();                       //Trava mutex para proteger o contador
+        leitores--;                             //Contabiliza quantidade de leitores
+        if(leitores==0) protegeEscrita.unlock();//Se acabaram os leitores, libera para escrita
+        lock_cont.unlock();                     //Libera mutex do contador
+        }
+    
     void apura()
     {
         std::vector<std::thread> votPorReino;
-        cond_escr.notify_one();
         for (int reino = 0; reino < N_REINOS; reino++)
         {
             votPorReino.push_back(std::thread([](Reino &reino,
                                                  std::vector<long> &votosGeral,
                                                  std::vector<long> &votosPorReino,
                                                  std::vector<std::vector<long>> &votosPorCidade,
-                                                 std::condition_variable &cond_escr,
-                                                 std::condition_variable &cond_leit,
-                                                 int &leitores,
-                                                 int &escritores,
-                                                 std::mutex &lock_cont) {
+                                                 std::mutex &protegeEscrita) {
                 //Chama a apuracao de cada reino
-                reino.apura(std::ref(votosGeral), std::ref(votosPorReino), std::ref(votosPorCidade), std::ref(cond_escr), std::ref(cond_leit),  std::ref(leitores), std::ref(escritores), std::ref(lock_cont));
+                reino.apura(std::ref(votosGeral), std::ref(votosPorReino), std::ref(votosPorCidade), std::ref(protegeEscrita));
             },
                                               std::ref(reinos.at(reino)),
                                               std::ref(votosGeral),
                                               std::ref(votosPorReino[reino]),
                                               std::ref(votosPorCidade.at(reino)),
-                                              std::ref(cond_escr),
-                                              std::ref(cond_leit),
-                                              std::ref(leitores),
-                                              std::ref(escritores),
-                                              std::ref(lock_cont)
+                                              std::ref(protegeEscrita)
                                               ));
         }
         for (auto &threadLancada : votPorReino) //Para cada thread lançada e armazenada em apuraPoUrna
         {
             threadLancada.join(); //Aguarda a thread finalizar para proseguir
         }
-        cond_escr.notify_all(); //Notifica para avisar todas as outras threads de que a apuracao foi finalizada
+        finalizada=true;
+        
     }
 
 };
